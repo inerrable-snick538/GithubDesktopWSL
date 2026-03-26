@@ -1,6 +1,6 @@
 # GitHub Desktop WSL
 
-A fork of [GitHub Desktop](https://github.com/desktop/desktop) that makes WSL repositories work properly. If you develop in WSL but want a GUI for git, this is for you.
+Think of it like the [VS Code Remote WSL extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-wsl) but for GitHub Desktop. A fork of [GitHub Desktop](https://github.com/desktop/desktop) that makes WSL repositories work properly — **6-27x faster git operations**, working SSH keys, and no more CRLF issues.
 
 **[Download the latest release](https://github.com/aleixrodriala/GithubDesktopWSL/releases/latest)**
 
