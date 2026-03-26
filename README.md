@@ -2,7 +2,7 @@
 
 A fork of [GitHub Desktop](https://github.com/desktop/desktop) that makes WSL repositories work properly. If you develop in WSL but want a GUI for git, this is for you.
 
-**[Download the latest release](https://github.com/aleixrodriala/github-desktop-wsl/releases/latest)**
+**[Download the latest release](https://github.com/aleixrodriala/GithubDesktopWSL/releases/latest)**
 
 > Installs side-by-side with official GitHub Desktop — you can keep both.
 
@@ -68,7 +68,7 @@ These are the actual sequences Desktop runs during common operations:
 
 ## Install
 
-1. Download **[GitHubDesktopWSLSetup-x64.exe](https://github.com/aleixrodriala/github-desktop-wsl/releases/latest)**
+1. Download **[GitHubDesktopWSLSetup-x64.exe](https://github.com/aleixrodriala/GithubDesktopWSL/releases/latest)**
 2. Run the installer
 3. Open any WSL repository
 

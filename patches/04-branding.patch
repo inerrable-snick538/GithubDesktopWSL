@@ -38,7 +38,7 @@ index e2ae688d55..389b90eed6 100644
 -  return `https://central.github.com/api/deployments/desktop/desktop/${architecturePath}latest?version=${version}&env=${getChannel()}`
 +  // Point to our own GitHub Releases for the WSL fork.
 +  // Squirrel.Windows expects a URL serving RELEASES + .nupkg files.
-+  return `https://github.com/aleixrodriala/github-desktop-wsl/releases/latest/download`
++  return `https://github.com/aleixrodriala/GithubDesktopWSL/releases/latest/download`
  }
  
  export function shouldMakeDelta() {
