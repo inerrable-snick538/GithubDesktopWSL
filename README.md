@@ -2,11 +2,7 @@
 
 Think of it like the [VS Code Remote WSL extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-wsl) but for GitHub Desktop. A fork of [GitHub Desktop](https://github.com/desktop/desktop) that makes WSL repositories work properly — **6-27x faster git operations**, working SSH keys, and no more CRLF issues.
 
-**[Download the latest release](https://github.com/aleixrodriala/GithubDesktopWSL/releases/latest)**
-
-<p align="center">
-  <img src="banner.png" alt="GitHub Desktop WSL — 2ms git status, 16ms open repo, 20x faster" width="640">
-</p>
+**[Download the latest release](https://github.com/aleixrodriala/GithubDesktopWSL/releases/latest)** — installs side-by-side with official GitHub Desktop
 
 ## The problem
 
