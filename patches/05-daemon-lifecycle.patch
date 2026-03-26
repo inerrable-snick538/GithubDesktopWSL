@@ -1,0 +1,52 @@
+diff --git a/app/src/main-process/main.ts b/app/src/main-process/main.ts
+index 18cf6cd92f..b571802ab8 100644
+--- a/app/src/main-process/main.ts
++++ b/app/src/main-process/main.ts
+@@ -131,6 +131,14 @@ app.on('window-all-closed', () => {
+   // the crash process window which is shown after the main window is closed.
+ })
+ 
++// WSL: kill the daemon when the app quits
++app.on('will-quit', () => {
++  try {
++    const { stopDaemon } = require('../lib/wsl')
++    stopDaemon()
++  } catch { /* ok */ }
++})
++
+ process.on('uncaughtException', (error: Error) => {
+   error = withSourceMappedStack(error)
+   reportError(error, getExtraErrorContext())
+@@ -627,7 +635,14 @@ app.on('ready', () => {
+     app.moveToApplicationsFolder?.()
+   })
+ 
+-  ipcMain.handle('move-to-trash', (_, path) => shell.trashItem(path))
++  ipcMain.handle('move-to-trash', async (_, path) => {
++    const { isWSLPath, trashWSLPath } = require('../lib/wsl')
++    if (isWSLPath(path)) {
++      trashWSLPath(path)
++      return
++    }
++    return shell.trashItem(path)
++  })
+   ipcMain.handle('show-item-in-folder', async (_, path) =>
+     shell.showItemInFolder(path)
+   )
+diff --git a/app/src/main-process/squirrel-updater.ts b/app/src/main-process/squirrel-updater.ts
+index d319880b0a..6c97d70f10 100644
+--- a/app/src/main-process/squirrel-updater.ts
++++ b/app/src/main-process/squirrel-updater.ts
+@@ -146,7 +146,11 @@ function createShortcut(locations: ShortcutLocations): Promise<void> {
+ 
+ async function handleUninstall(): Promise<void> {
+   await removeShortcut()
+-  return uninstallWindowsCLI()
++  await uninstallWindowsCLI()
++  try {
++    const { cleanupDaemon } = require('../lib/wsl')
++    cleanupDaemon()
++  } catch { /* ok */ }
+ }
+ 
+ function removeShortcut(): Promise<void> {

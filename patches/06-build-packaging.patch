@@ -1,0 +1,50 @@
+diff --git a/script/build.ts b/script/build.ts
+index e3708f8dc0..431679cf31 100755
+--- a/script/build.ts
++++ b/script/build.ts
+@@ -404,6 +404,16 @@ function copyDependencies() {
+     ),
+     { recursive: true, verbatimSymlinks: true }
+   )
++
++  // WSL fork: bundle the daemon binary for auto-deployment into WSL
++  const daemonSource = path.resolve(projectRoot, 'wsl-daemon', 'wsl-git-daemon')
++  const daemonDest = path.resolve(outRoot, 'wsl-git-daemon')
++  if (existsSync(daemonSource)) {
++    console.log('  Copying wsl-git-daemon binary')
++    cpSync(daemonSource, daemonDest)
++  } else {
++    console.log('  Warning: wsl-git-daemon not found (build with make in wsl-daemon/)')
++  }
+ }
+ 
+ function generateLicenseMetadata(outRoot: string) {
+diff --git a/script/package.ts b/script/package.ts
+index 229df55e8a..3a59777867 100644
+--- a/script/package.ts
++++ b/script/package.ts
+@@ -104,7 +104,9 @@ function packageWindows() {
+     setupMsi: getWindowsInstallerName(),
+   }
+ 
+-  if (shouldMakeDelta()) {
++  // WSL fork: skip remote release sync to avoid 404 on first build
++  // and when we don't have Azure code signing
++  if (shouldMakeDelta() && !process.env.SKIP_CODE_SIGNING) {
+     const url = new URL(getUpdatesURL())
+     // Make sure Squirrel.Windows isn't affected by partially or completely
+     // disabled releases.
+@@ -112,7 +114,12 @@ function packageWindows() {
+     options.remoteReleases = url.toString()
+   }
+ 
+-  if (isGitHubActions() && isPublishable()) {
++  // WSL fork: skip Azure code signing (we're unsigned)
++  if (
++    isGitHubActions() &&
++    isPublishable() &&
++    !process.env.SKIP_CODE_SIGNING
++  ) {
+     assertNonNullable(process.env.RUNNER_TEMP, 'Missing RUNNER_TEMP env var')
+ 
+     const acsPath = join(process.env.RUNNER_TEMP, 'acs')

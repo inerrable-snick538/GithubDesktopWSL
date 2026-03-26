@@ -1,0 +1,7 @@
+# Build output
+wsl-daemon/wsl-git-daemon
+*.o
+
+# OS files
+.DS_Store
+Thumbs.db

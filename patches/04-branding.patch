@@ -1,0 +1,51 @@
+diff --git a/app/package.json b/app/package.json
+index 26a8a7e923..c41dfbeeaa 100644
+--- a/app/package.json
++++ b/app/package.json
+@@ -1,7 +1,7 @@
+ {
+-  "name": "desktop",
+-  "productName": "GitHub Desktop",
+-  "bundleID": "com.github.GitHubClient",
++  "name": "desktop-wsl",
++  "productName": "GitHub Desktop WSL",
++  "bundleID": "com.github.GitHubClientWSL",
+   "companyName": "GitHub, Inc.",
+   "version": "3.5.6",
+   "main": "./main.js",
+diff --git a/script/dist-info.ts b/script/dist-info.ts
+index e2ae688d55..389b90eed6 100644
+--- a/script/dist-info.ts
++++ b/script/dist-info.ts
+@@ -94,7 +94,7 @@ export function getWindowsDeltaNugetPackagePath() {
+ }
+ 
+ export function getWindowsIdentifierName() {
+-  return 'GitHubDesktop'
++  return 'GitHubDesktopWSL'
+ }
+ 
+ export function getBundleSizes() {
+@@ -135,15 +135,16 @@ export function getDistArchitecture(): 'arm64' | 'x64' {
+ }
+ 
+ export function getUpdatesURL() {
+-  // It is also possible to use a `x64/` path, but for now we'll leave the
+-  // original URL without architecture in it (which will still work for
+-  // compatibility reasons) in case anything goes wrong until we have everything
+-  // sorted out.
+-  const architecturePath = getDistArchitecture() === 'arm64' ? 'arm64/' : ''
+-  return `https://central.github.com/api/deployments/desktop/desktop/${architecturePath}latest?version=${version}&env=${getChannel()}`
++  // Point to our own GitHub Releases for the WSL fork.
++  // Squirrel.Windows expects a URL serving RELEASES + .nupkg files.
++  return `https://github.com/aleixrodriala/github-desktop-wsl/releases/latest/download`
+ }
+ 
+ export function shouldMakeDelta() {
++  // WSL fork: skip delta generation (no previous releases to diff against)
++  if (process.env.SKIP_CODE_SIGNING) {
++    return false
++  }
+   // Only production and beta channels include deltas. Test releases aren't
+   // necessarily sequential so deltas wouldn't make sense.
+   return ['production', 'beta'].includes(getChannel())

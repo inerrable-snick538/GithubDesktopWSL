@@ -1,0 +1,77 @@
+diff --git a/app/src/lib/git/core.ts b/app/src/lib/git/core.ts
+index 103b60bf3b..3429661f5a 100644
+--- a/app/src/lib/git/core.ts
++++ b/app/src/lib/git/core.ts
+@@ -17,6 +17,7 @@ import { kStringMaxLength } from 'buffer'
+ import { withHooksEnv } from '../hooks/with-hooks-env'
+ import { coerceToString } from './coerce-to-string'
+ import { pushTerminalChunk } from './push-terminal-chunk'
++import { isWSLPath, daemonExecGit } from '../wsl'
+ 
+ export const isMaxBufferExceededError = (
+   error: unknown
+@@ -236,6 +237,64 @@ export async function git(
+ 
+   const opts = { ...defaultOptions, ...options }
+ 
++  // ── WSL path: route through daemon instead of dugite ──
++  if (isWSLPath(path)) {
++    const commandName = `${name}: git ${args.join(' ')}`
++    const result = await GitPerf.measure(commandName, () =>
++      daemonExecGit(args, path, {
++        encoding: options?.encoding === 'buffer' ? 'buffer' : undefined,
++        stdin: typeof opts.stdin === 'string' ? opts.stdin : opts.stdin?.toString('utf8'),
++      })
++    )
++
++    const exitCode = result.exitCode
++    let gitError: DugiteError | null = null
++    const acceptableExitCode = opts.successExitCodes
++      ? opts.successExitCodes.has(exitCode)
++      : false
++
++    const stderrStr = result.stderr
++    const stdoutStr =
++      typeof result.stdout === 'string'
++        ? result.stdout
++        : (result.stdout as Buffer).toString('utf8')
++
++    if (!acceptableExitCode) {
++      gitError = parseError(stderrStr)
++      if (gitError === null) {
++        gitError = parseError(stdoutStr)
++      }
++    }
++
++    const gitErrorDescription =
++      gitError !== null ? getDescriptionForError(gitError, stderrStr) : null
++
++    const gitResult: IGitResult = {
++      stdout: result.stdout as any,
++      stderr: result.stderr as any,
++      exitCode,
++      gitError,
++      gitErrorDescription,
++      path,
++    }
++
++    let acceptableError = true
++    if (gitError !== null && opts.expectedErrors) {
++      acceptableError = opts.expectedErrors.has(gitError)
++    }
++
++    if ((gitError !== null && acceptableError) || acceptableExitCode) {
++      return gitResult
++    }
++
++    log.error(
++      `\`git ${args.join(' ')}\` exited with an unexpected code: ${exitCode}.\n${stderrStr.slice(-1024)}`
++    )
++    throw new GitError(gitResult, args, stderrStr)
++  }
++
++  // ── Standard (non-WSL) path: use dugite as before ──
++
+   // The combined contents of stdout and stderr with some light processing
+   // applied to remove redundant lines caused by Git's use of `\r` to "erase"
+   // the current line while writing progress output. See createTerminalOutput.

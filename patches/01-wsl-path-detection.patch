@@ -1,0 +1,520 @@
+diff --git a/app/src/lib/wsl.ts b/app/src/lib/wsl.ts
+new file mode 100644
+index 0000000000..1e64880983
+--- /dev/null
++++ b/app/src/lib/wsl.ts
+@@ -0,0 +1,490 @@
++/**
++ * WSL utilities and daemon client for GitHub Desktop WSL.
++ *
++ * Detects WSL paths (\\wsl.localhost\... or \\wsl$\...),
++ * converts them to Linux paths, and communicates with the
++ * wsl-git-daemon over TCP for git commands and file operations.
++ */
++
++import * as net from 'net'
++import * as Path from 'path'
++import * as fs from 'fs'
++import { execFileSync } from 'child_process'
++import { readFile as fsReadFile, writeFile as fsWriteFile, unlink as fsUnlink } from 'fs/promises'
++import { pathExists as localPathExists } from '../ui/lib/path-exists'
++
++/* ── WSL Path Utilities ──────────────────────────────────────────────── */
++
++const WSL_PATH_RE = /^\\\\wsl[.$\\]/i
++
++export function isWSLPath(p: string): boolean {
++  return WSL_PATH_RE.test(p)
++}
++
++/**
++ * Parse a Windows WSL UNC path into distro name and Linux path.
++ * \\wsl.localhost\Ubuntu-24.04\home\user → { distro: 'Ubuntu-24.04', linuxPath: '/home/user' }
++ */
++export function parseWSLPath(winPath: string): {
++  distro: string
++  linuxPath: string
++} {
++  const lower = winPath.toLowerCase()
++  let start: string
++  if (lower.startsWith('\\\\wsl.localhost\\')) {
++    start = winPath.slice(16)
++  } else if (lower.startsWith('\\\\wsl$\\')) {
++    start = winPath.slice(7)
++  } else {
++    throw new Error(`Not a WSL path: ${winPath}`)
++  }
++
++  const slashIdx = start.indexOf('\\')
++  if (slashIdx === -1) {
++    return { distro: start, linuxPath: '/' }
++  }
++
++  return {
++    distro: start.slice(0, slashIdx),
++    linuxPath: start.slice(slashIdx).replace(/\\/g, '/'),
++  }
++}
++
++/** Resolve WSL path to { distro, linuxPath }, caching and persisting the distro. */
++function resolveWSLPath(winPath: string): { distro: string; linuxPath: string } {
++  const result = parseWSLPath(winPath)
++  if (cachedDistro !== result.distro) {
++    cachedDistro = result.distro
++    persistDistro(result.distro)
++  }
++  return result
++}
++
++/** Convert a path to a Linux path — passthrough if not a WSL UNC path. */
++function toLinuxPath(p: string): string {
++  return isWSLPath(p) ? resolveWSLPath(p).linuxPath : p
++}
++
++/** Get the distro from a path, or fall back to cached distro. */
++function distroFor(p: string): string | undefined {
++  return isWSLPath(p) ? resolveWSLPath(p).distro : undefined
++}
++
++/**
++ * Delete a directory tree at a WSL UNC path via wsl.exe rm -rf.
++ * Exported for use from the main process (trash handler).
++ */
++export function trashWSLPath(winPath: string): void {
++  const { distro, linuxPath } = parseWSLPath(winPath)
++  execFileSync('wsl.exe', ['-d', distro, '-e', 'rm', '-rf', linuxPath], {
++    timeout: 30_000,
++  })
++}
++
++/* ── Daemon Protocol ─────────────────────────────────────────────────── */
++
++const FRAME_INIT = 0x01
++const FRAME_STDIN = 0x02
++const FRAME_STDOUT = 0x03
++const FRAME_STDERR = 0x04
++const FRAME_EXIT = 0x05
++const FRAME_ERROR = 0x06
++const FRAME_STAT_RESULT = 0x07
++
++interface DaemonInfo {
++  port: number
++  token: string
++}
++
++interface DaemonResponse {
++  stdout: Buffer
++  stderr: Buffer
++  exitCode: number
++  statResult?: string
++}
++
++/* ── Daemon State ────────────────────────────────────────────────────── */
++
++let cachedInfo: DaemonInfo | null = null
++let cachedInfoMtime: number = 0
++let cachedDistro: string | null = null
++
++const DAEMON_INFO_LINUX_PATH = '/tmp/wsl-git-daemon.info'
++const DAEMON_DEPLOY_DIR = '$HOME/.local/bin'
++const DAEMON_DEPLOY_BIN = '$HOME/.local/bin/wsl-git-daemon'
++
++/** Persist the active distro so cleanup works across app restarts. */
++function getDistroStatePath(): string {
++  // Use APPDATA on Windows, fallback for dev/test
++  const appData = process.env.APPDATA || process.env.HOME || '/tmp'
++  return Path.join(appData, 'GitHub Desktop WSL', 'wsl-daemon-state.json')
++}
++
++function persistDistro(distro: string): void {
++  try {
++    const statePath = getDistroStatePath()
++    fs.mkdirSync(Path.dirname(statePath), { recursive: true })
++    fs.writeFileSync(statePath, JSON.stringify({ distro }))
++  } catch { /* best effort */ }
++}
++
++function loadPersistedDistro(): string | null {
++  try {
++    const data = JSON.parse(fs.readFileSync(getDistroStatePath(), 'utf8'))
++    return data.distro || null
++  } catch {
++    return null
++  }
++}
++
++/**
++ * Get the distro the daemon is running in.
++ * Checks in-memory cache, then persisted state.
++ */
++export function getActiveDistro(): string | null {
++  return cachedDistro || loadPersistedDistro()
++}
++
++/**
++ * Stop the daemon in the active distro. Exported for use from main process
++ * quit/uninstall handlers.
++ */
++export function stopDaemon(): void {
++  const distro = getActiveDistro()
++  if (!distro) return
++  try {
++    execFileSync(
++      'wsl.exe',
++      ['-d', distro, '-e', 'sh', '-c', 'pkill -f wsl-git-daemon 2>/dev/null; rm -f /tmp/wsl-git-daemon.info'],
++      { timeout: 3000, stdio: 'pipe' }
++    )
++  } catch { /* daemon may not be running */ }
++}
++
++/**
++ * Full cleanup: stop daemon + remove binary + remove state file.
++ * Used on uninstall.
++ */
++export function cleanupDaemon(): void {
++  const distro = getActiveDistro()
++  if (!distro) return
++  try {
++    execFileSync(
++      'wsl.exe',
++      ['-d', distro, '-e', 'sh', '-c',
++        'pkill -f wsl-git-daemon 2>/dev/null; rm -f /tmp/wsl-git-daemon.info $HOME/.local/bin/wsl-git-daemon'],
++      { timeout: 5000, stdio: 'pipe' }
++    )
++  } catch { /* best effort */ }
++  try { fs.unlinkSync(getDistroStatePath()) } catch { /* ok */ }
++}
++
++function getDaemonInfoUNCPath(distro: string): string {
++  return `\\\\wsl.localhost\\${distro}\\tmp\\wsl-git-daemon.info`
++}
++
++function readDaemonInfo(distro?: string): DaemonInfo {
++  // Restore cached distro from disk on first call
++  if (!cachedDistro) cachedDistro = loadPersistedDistro()
++
++  const pathsToTry: string[] = []
++  if (distro) pathsToTry.push(getDaemonInfoUNCPath(distro))
++  if (cachedDistro) pathsToTry.push(getDaemonInfoUNCPath(cachedDistro))
++  pathsToTry.push(DAEMON_INFO_LINUX_PATH)
++
++  for (const infoPath of pathsToTry) {
++    try {
++      const stat = fs.statSync(infoPath)
++      if (cachedInfo && stat.mtimeMs === cachedInfoMtime) return cachedInfo
++      const raw = fs.readFileSync(infoPath, 'utf8')
++      cachedInfo = JSON.parse(raw.trim())
++      cachedInfoMtime = stat.mtimeMs
++      return cachedInfo!
++    } catch {
++      continue
++    }
++  }
++
++  throw new Error('Cannot read daemon info — daemon not running')
++}
++
++/* ── Frame I/O ───────────────────────────────────────────────────────── */
++
++function sendFrame(socket: net.Socket, type: number, data: Buffer | string): void {
++  const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : data
++  const hdr = Buffer.alloc(5)
++  hdr[0] = type
++  hdr.writeUInt32BE(buf.length, 1)
++  socket.write(hdr)
++  if (buf.length > 0) socket.write(buf)
++}
++
++function daemonRequestRaw(
++  info: DaemonInfo,
++  initPayload: object
++): Promise<DaemonResponse> {
++  return new Promise((resolve, reject) => {
++    const socket = new net.Socket()
++    const stdoutChunks: Buffer[] = []
++    const stderrChunks: Buffer[] = []
++    let statResult: string | undefined
++    let exitCode = -1
++    let buf = Buffer.alloc(0)
++
++    socket.connect(info.port, '127.0.0.1', () => {
++      sendFrame(socket, FRAME_INIT, JSON.stringify({ token: info.token, ...initPayload }))
++    })
++
++    socket.on('data', (chunk: Buffer) => {
++      buf = Buffer.concat([buf, chunk])
++      while (buf.length >= 5) {
++        const type = buf[0]
++        const len = buf.readUInt32BE(1)
++        if (buf.length < 5 + len) break
++        const data = buf.slice(5, 5 + len)
++        buf = buf.slice(5 + len)
++
++        switch (type) {
++          case FRAME_STDOUT: stdoutChunks.push(data); break
++          case FRAME_STDERR: stderrChunks.push(data); break
++          case FRAME_STAT_RESULT: statResult = data.toString('utf8'); break
++          case FRAME_EXIT:
++            exitCode = data.readUInt32BE(0)
++            socket.end()
++            break
++          case FRAME_ERROR:
++            socket.end()
++            reject(new Error(`Daemon error: ${data.toString('utf8')}`))
++            return
++        }
++      }
++    })
++
++    socket.on('end', () => resolve({
++      stdout: Buffer.concat(stdoutChunks),
++      stderr: Buffer.concat(stderrChunks),
++      exitCode,
++      statResult,
++    }))
++
++    socket.on('error', (err: Error) =>
++      reject(new Error(`Daemon connection failed: ${err.message}`))
++    )
++
++    socket.setTimeout(300_000, () => {
++      socket.destroy()
++      reject(new Error('Daemon request timed out'))
++    })
++  })
++}
++
++/**
++ * Send a request to the daemon, auto-starting it on connection failure.
++ */
++async function daemonRequest(
++  payload: object,
++  distro?: string
++): Promise<DaemonResponse> {
++  try {
++    return await daemonRequestRaw(readDaemonInfo(distro), payload)
++  } catch {
++    // Daemon not running — start it and retry
++  }
++
++  const d = distro || cachedDistro
++  if (!d) {
++    throw new Error('WSL daemon is not running and no distro is known.')
++  }
++  await startDaemon(d)
++  return daemonRequestRaw(readDaemonInfo(d), payload)
++}
++
++/* ── Daemon Lifecycle ────────────────────────────────────────────────── */
++
++function getBundledDaemonPath(): string {
++  for (const p of [
++    Path.resolve(__dirname, 'wsl-git-daemon'),
++    Path.resolve(__dirname, '..', '..', 'wsl-daemon', 'wsl-git-daemon'),
++  ]) {
++    if (fs.existsSync(p)) return p
++  }
++  throw new Error('wsl-git-daemon binary not found. Build it: cd wsl-daemon && make')
++}
++
++let daemonStarting: Promise<void> | null = null
++
++async function startDaemon(distro: string): Promise<void> {
++  // Prevent concurrent starts (multiple WSL repos refreshing at once)
++  if (daemonStarting) return daemonStarting
++  daemonStarting = startDaemonImpl(distro).finally(() => { daemonStarting = null })
++  return daemonStarting
++}
++
++async function startDaemonImpl(distro: string): Promise<void> {
++  // All wsl.exe calls run async to avoid blocking the UI thread
++  const { execFile } = require('child_process') as typeof import('child_process')
++
++  const wslAsync = (cmd: string, timeout = 5000): Promise<string> =>
++    new Promise((resolve, reject) => {
++      execFile('wsl.exe', ['-d', distro, '-e', 'sh', '-c', cmd],
++        { timeout, encoding: 'utf8' },
++        (err: Error | null, stdout: string) => err ? reject(err) : resolve(stdout)
++      )
++    })
++
++  // Deploy binary if needed
++  try {
++    const bundledPath = getBundledDaemonPath()
++    let needsDeploy = true
++    try {
++      await wslAsync(`test -x ${DAEMON_DEPLOY_BIN}`)
++      const localSize = fs.statSync(bundledPath).size
++      const remoteSize = (await wslAsync(`stat -c '%s' ${DAEMON_DEPLOY_BIN}`)).trim()
++      if (String(localSize) === remoteSize) needsDeploy = false
++    } catch { /* needs deploy */ }
++
++    if (needsDeploy) {
++      const wslPath = (await wslAsync(`wslpath -a '${bundledPath.replace(/'/g, "'\\''")}'`)).trim()
++      await wslAsync(`mkdir -p ${DAEMON_DEPLOY_DIR} && cp "${wslPath}" ${DAEMON_DEPLOY_BIN} && chmod 755 ${DAEMON_DEPLOY_BIN}`, 10000)
++    }
++  } catch (e: any) {
++    throw new Error(`Failed to deploy daemon: ${e.message}`)
++  }
++
++  // Kill stale daemon + start fresh
++  try { await wslAsync('pkill -f wsl-git-daemon 2>/dev/null; rm -f /tmp/wsl-git-daemon.info') } catch { /* ok */ }
++  await wslAsync(`${DAEMON_DEPLOY_BIN} --daemonize`, 10000)
++
++  // Wait for info file
++  const infoPath = getDaemonInfoUNCPath(distro)
++  for (let i = 0; i < 50; i++) {
++    await new Promise(r => setTimeout(r, 100))
++    try {
++      const info = JSON.parse(fs.readFileSync(infoPath, 'utf8').trim())
++      if (info.port && info.token) {
++        cachedInfo = info
++        cachedDistro = distro
++        persistDistro(distro)
++        return
++      }
++    } catch { continue }
++  }
++
++  throw new Error(`Daemon failed to start in "${distro}" within 5 seconds`)
++}
++
++/* ── Public API: Daemon Operations ───────────────────────────────────── */
++
++export interface DaemonGitResult {
++  stdout: string | Buffer
++  stderr: string
++  exitCode: number
++}
++
++export async function daemonExecGit(
++  args: string[],
++  cwd: string,
++  options?: { encoding?: 'buffer' | BufferEncoding; stdin?: string }
++): Promise<DaemonGitResult> {
++  const payload: Record<string, unknown> = {
++    cmd: 'git',
++    args,
++    cwd: toLinuxPath(cwd),
++  }
++  if (options?.stdin) payload.stdin = options.stdin
++
++  const result = await daemonRequest(payload, distroFor(cwd))
++
++  return {
++    stdout:
++      options?.encoding === 'buffer'
++        ? result.stdout
++        : result.stdout.toString((options?.encoding as BufferEncoding) || 'utf8'),
++    stderr: result.stderr.toString('utf8'),
++    exitCode: result.exitCode,
++  }
++}
++
++export async function daemonReadFile(winPath: string, encoding?: 'utf8'): Promise<string | Buffer> {
++  const result = await daemonRequest(
++    { cmd: 'readfile', path: toLinuxPath(winPath) },
++    distroFor(winPath)
++  )
++  if (result.exitCode !== 0) throw new Error(`Failed to read ${winPath}`)
++  return encoding === 'utf8' ? result.stdout.toString('utf8') : result.stdout
++}
++
++export async function daemonWriteFile(winPath: string, content: string | Buffer): Promise<void> {
++  const distro = distroFor(winPath)
++  // Ensure daemon is running
++  try { readDaemonInfo(distro) } catch { if (distro) await startDaemon(distro) }
++
++  const info = readDaemonInfo(distro)
++  const linuxPath = toLinuxPath(winPath)
++
++  return new Promise((resolve, reject) => {
++    const socket = new net.Socket()
++
++    socket.connect(info.port, '127.0.0.1', () => {
++      sendFrame(socket, FRAME_INIT, JSON.stringify({ token: info.token, cmd: 'writefile', path: linuxPath }))
++      sendFrame(socket, FRAME_STDIN, typeof content === 'string' ? Buffer.from(content, 'utf8') : content)
++      sendFrame(socket, FRAME_STDIN, Buffer.alloc(0)) // EOF
++    })
++
++    let buf = Buffer.alloc(0)
++    socket.on('data', (chunk: Buffer) => {
++      buf = Buffer.concat([buf, chunk])
++      while (buf.length >= 5) {
++        const type = buf[0]
++        const len = buf.readUInt32BE(1)
++        if (buf.length < 5 + len) break
++        const data = buf.slice(5, 5 + len)
++        buf = buf.slice(5 + len)
++        if (type === FRAME_EXIT) { socket.end(); resolve() }
++        else if (type === FRAME_ERROR) { socket.end(); reject(new Error(`Daemon write error: ${data.toString('utf8')}`)) }
++      }
++    })
++
++    socket.on('error', reject)
++    socket.setTimeout(30_000, () => { socket.destroy(); reject(new Error('Write timed out')) })
++  })
++}
++
++export async function daemonUnlink(winPath: string): Promise<void> {
++  const result = await daemonRequest({ cmd: 'unlink', path: toLinuxPath(winPath) }, distroFor(winPath))
++  if (result.exitCode !== 0) throw new Error(`Failed to unlink ${winPath}`)
++}
++
++export async function daemonPathExists(winPath: string): Promise<boolean> {
++  const result = await daemonRequest({ cmd: 'pathexists', path: toLinuxPath(winPath) }, distroFor(winPath))
++  return result.statResult ? JSON.parse(result.statResult).exists === true : false
++}
++
++export async function daemonStat(winPath: string): Promise<{ exists: boolean; size: number; isDir: boolean }> {
++  const result = await daemonRequest({ cmd: 'stat', path: toLinuxPath(winPath) }, distroFor(winPath))
++  return result.statResult ? JSON.parse(result.statResult) : { exists: false, size: 0, isDir: false }
++}
++
++/* ── WSL-aware Wrappers (drop-in replacements) ───────────────────────── */
++
++export async function wslReadFile(filePath: string, encoding: 'utf8'): Promise<string>
++export async function wslReadFile(filePath: string): Promise<Buffer>
++export async function wslReadFile(filePath: string, encoding?: 'utf8'): Promise<string | Buffer> {
++  if (isWSLPath(filePath)) return daemonReadFile(filePath, encoding)
++  return encoding ? fsReadFile(filePath, encoding) : fsReadFile(filePath)
++}
++
++export async function wslWriteFile(filePath: string, content: string | Buffer): Promise<void> {
++  if (isWSLPath(filePath)) return daemonWriteFile(filePath, content)
++  return fsWriteFile(filePath, content)
++}
++
++export async function wslPathExists(filePath: string): Promise<boolean> {
++  if (isWSLPath(filePath)) return daemonPathExists(filePath)
++  return localPathExists(filePath)
++}
++
++export async function wslUnlink(filePath: string): Promise<void> {
++  if (isWSLPath(filePath)) return daemonUnlink(filePath)
++  return fsUnlink(filePath)
++}
+diff --git a/app/src/models/repository.ts b/app/src/models/repository.ts
+index 74b9a89b9e..7c586f75b4 100644
+--- a/app/src/models/repository.ts
++++ b/app/src/models/repository.ts
+@@ -7,6 +7,7 @@ import {
+   ForkContributionTarget,
+ } from './workflow-preferences'
+ import { assertNever, fatalError } from '../lib/fatal-error'
++import { isWSLPath } from '../lib/wsl'
+ import { createEqualityHash } from './equality-hash'
+ 
+ function getBaseName(path: string): string {
+@@ -77,6 +78,11 @@ export class Repository {
+   public get path(): string {
+     return this.mainWorkTree.path
+   }
++
++  /** Whether this repository is on a WSL filesystem */
++  public get isWSL(): boolean {
++    return isWSLPath(this.path)
++  }
+ }
+ 
+ /** A worktree linked to a main working tree (aka `Repository`) */
