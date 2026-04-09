@@ -1,8 +1,8 @@
 diff --git a/app/package.json b/app/package.json
-index 26a8a7e923..c41dfbeeaa 100644
+index 905b69c..2bf8e8f 100644
 --- a/app/package.json
 +++ b/app/package.json
-@@ -1,7 +1,7 @@
+@@ -1,5 +1,5 @@
  {
 -  "name": "desktop",
 -  "productName": "GitHub Desktop",
@@ -11,13 +11,11 @@ index 26a8a7e923..c41dfbeeaa 100644
 +  "productName": "GitHub Desktop WSL",
 +  "bundleID": "com.github.GitHubClientWSL",
    "companyName": "GitHub, Inc.",
-   "version": "3.5.6",
-   "main": "./main.js",
 diff --git a/script/dist-info.ts b/script/dist-info.ts
-index e2ae688d55..389b90eed6 100644
+index 459015a..9ed1c64 100644
 --- a/script/dist-info.ts
 +++ b/script/dist-info.ts
-@@ -94,7 +94,7 @@ export function getWindowsDeltaNugetPackagePath() {
+@@ -95,7 +95,7 @@ export function getWindowsDeltaNugetPackagePath() {
  }
  
  export function getWindowsIdentifierName() {
@@ -26,7 +24,7 @@ index e2ae688d55..389b90eed6 100644
  }
  
  export function getBundleSizes() {
-@@ -135,15 +135,16 @@ export function getDistArchitecture(): 'arm64' | 'x64' {
+@@ -136,15 +136,16 @@ export function getDistArchitecture(): 'arm64' | 'x64' {
  }
  
  export function getUpdatesURL() {
